@@ -2,6 +2,7 @@ use crate::face_detection::FaceDetector;
 use crate::face_storage::FaceDatabase;
 use crate::camera::CameraCapture;
 use anyhow::{Result, anyhow};
+use chrono;
 
 #[derive(Debug)]
 pub struct AuthenticationResult {
@@ -81,17 +82,18 @@ pub fn authenticate_face_from_camera() -> Result<AuthenticationResult> {
     let mut camera = CameraCapture::new()?;
     let detector = FaceDetector::new()?;
 
-    // Capture image from camera
-    let temp_image_path = "temp_authentication.jpg";
-    camera.capture_and_save(temp_image_path)?;
+    // Capture image from camera with timestamp in dedicated directory
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let temp_image_path = format!("captured_images/authentication_{}.jpg", timestamp);
+    camera.capture_and_save(&temp_image_path)?;
 
     // Detect faces in captured image
     println!("Detecting faces in captured image...");
-    let faces = detector.detect_faces(temp_image_path)?;
+    let faces = detector.detect_faces(&temp_image_path)?;
 
     if faces.is_empty() {
-        // Clean up temp file
-        let _ = std::fs::remove_file(temp_image_path);
+        // Keep the image file for debugging
+        println!("Captured image saved as: {}", temp_image_path);
         return Err(anyhow!("No faces detected in the captured image. Please ensure your face is clearly visible and try again."));
     }
 
@@ -106,8 +108,8 @@ pub fn authenticate_face_from_camera() -> Result<AuthenticationResult> {
     let database = FaceDatabase::load()?;
 
     if database.get_all_faces().is_empty() {
-        // Clean up temp file
-        let _ = std::fs::remove_file(temp_image_path);
+        // Keep the image file for debugging
+        println!("Authentication image saved as: {}", temp_image_path);
         return Err(anyhow!("No registered faces found. Please register a face first by selecting option 1."));
     }
 
@@ -129,8 +131,8 @@ pub fn authenticate_face_from_camera() -> Result<AuthenticationResult> {
         }
     }
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(temp_image_path);
+    // Keep the captured image for reference
+    println!("Authentication image saved as: {}", temp_image_path);
 
     if let Some((user_id, confidence)) = best_match {
         // Define threshold for successful authentication (tuned based on testing)

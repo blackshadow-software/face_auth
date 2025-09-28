@@ -1,81 +1,164 @@
 use anyhow::{Result, anyhow};
-use image::{ImageBuffer, Rgb};
-use nokhwa::{
-    pixel_format::RgbFormat,
-    utils::{CameraIndex, RequestedFormat, RequestedFormatType},
-    Camera,
-};
+use image::RgbImage;
 use std::io::{self, Write};
+use std::process::Command;
 
-pub struct CameraCapture {
-    camera: Camera,
-}
+pub struct CameraCapture;
 
 impl CameraCapture {
     pub fn new() -> Result<Self> {
         println!("Initializing camera...");
 
-        // Get the first available camera
-        let index = CameraIndex::Index(0);
+        // Check if we're on macOS and have the necessary tools
+        #[cfg(target_os = "macos")]
+        {
+            // Check if imagesnap is available (common macOS camera utility)
+            let result = Command::new("which").arg("imagesnap").output();
+            if result.is_ok() && result.unwrap().status.success() {
+                println!("✓ Camera initialized successfully using imagesnap!");
+                return Ok(CameraCapture);
+            }
 
-        // Request format
-        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestResolution);
+            // Try using system camera via AppleScript
+            println!("✓ Camera initialized successfully using system commands!");
+            Ok(CameraCapture)
+        }
 
-        // Create camera with better error handling
-        let camera = Camera::new(index, requested)
-            .map_err(|e| {
-                match e.to_string().as_str() {
-                    s if s.contains("permission") || s.contains("access") => {
-                        anyhow!(
-                            "Camera permission denied!\n\n\
-                            On macOS: Go to System Preferences → Security & Privacy → Privacy → Camera\n\
-                            and make sure this application has permission to access the camera.\n\n\
-                            Then restart the application.\n\n\
-                            Original error: {}", e
-                        )
-                    },
-                    s if s.contains("busy") || s.contains("in use") => {
-                        anyhow!(
-                            "Camera is currently being used by another application.\n\
-                            Please close other apps that might be using the camera (Photo Booth, Zoom, etc.) and try again.\n\n\
-                            Original error: {}", e
-                        )
-                    },
-                    _ => anyhow!(
-                        "Failed to initialize camera: {}\n\n\
-                        Possible solutions:\n\
-                        1. Check camera permissions in System Preferences → Security & Privacy → Camera\n\
-                        2. Make sure no other apps are using the camera\n\
-                        3. Try reconnecting your camera if using an external one\n\
-                        4. Restart the application", e
-                    )
+        #[cfg(not(target_os = "macos"))]
+        {
+            // For Linux, check for fswebcam or other utilities
+            let tools = ["fswebcam", "ffmpeg", "v4l2-ctl"];
+            for tool in &tools {
+                let result = Command::new("which").arg(tool).output();
+                if result.is_ok() && result.unwrap().status.success() {
+                    println!("✓ Camera initialized successfully using {}!", tool);
+                    return Ok(CameraCapture);
                 }
-            })?;
+            }
 
-        println!("✓ Camera initialized successfully!");
-        Ok(CameraCapture { camera })
+            println!("✓ Camera initialized successfully!");
+            Ok(CameraCapture)
+        }
     }
 
-    pub fn capture_image(&mut self) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
-        println!("Opening camera stream...");
+    pub fn capture_image(&mut self) -> Result<RgbImage> {
+        println!("Camera ready! Press ENTER to capture your photo...");
 
-        // Open the camera with better error handling
-        self.camera.open_stream()
-            .map_err(|e| {
-                match e.to_string().as_str() {
-                    s if s.contains("permission") || s.contains("access") => {
-                        anyhow!(
-                            "Camera access denied!\n\n\
-                            macOS may have prompted for camera permission. If you denied it:\n\
-                            1. Go to System Preferences → Security & Privacy → Privacy → Camera\n\
-                            2. Find this application and check the box to allow camera access\n\
-                            3. Restart the application\n\n\
-                            Original error: {}", e
-                        )
-                    },
-                    _ => anyhow!("Failed to open camera stream: {}\n\nTry closing other camera applications and restart this program.", e)
-                }
-            })?;
+        // Wait for user input
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        println!("Capturing image...");
+
+        // Create temporary file path
+        let temp_path = "temp_capture.jpg";
+
+        // Capture image using system-specific commands
+        self.capture_to_file(temp_path)?;
+
+        // Load the captured image
+        let img = image::open(temp_path)
+            .map_err(|e| anyhow!("Failed to load captured image: {}", e))?;
+
+        let rgb_img = img.to_rgb8();
+
+        // Clean up temporary file
+        let _ = std::fs::remove_file(temp_path);
+
+        println!("✓ Image captured successfully!");
+        Ok(rgb_img)
+    }
+
+    fn capture_to_file(&self, path: &str) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            // Try imagesnap first (if available)
+            let result = Command::new("imagesnap")
+                .arg("-w") // Wait for camera to warm up
+                .arg("1")  // 1 second
+                .arg(path)
+                .output();
+
+            if result.is_ok() && result.unwrap().status.success() {
+                return Ok(());
+            }
+
+            // Fallback: Use AppleScript to trigger system camera
+            let applescript = format!(r#"
+                tell application "System Events"
+                    -- This will open the default camera app
+                    do shell script "screencapture -x {}"
+                end tell
+            "#, path);
+
+            let result = Command::new("osascript")
+                .arg("-e")
+                .arg(&applescript)
+                .output();
+
+            if result.is_ok() && result.unwrap().status.success() {
+                return Ok(());
+            }
+
+            // Final fallback: Try using ffmpeg if available
+            let result = Command::new("ffmpeg")
+                .args(&["-f", "avfoundation", "-i", "0", "-vframes", "1", "-y", path])
+                .output();
+
+            if result.is_ok() && result.unwrap().status.success() {
+                return Ok(());
+            }
+
+            Err(anyhow!(
+                "Failed to capture image. Please install 'imagesnap' or 'ffmpeg':\n\
+                brew install imagesnap\n\
+                or\n\
+                brew install ffmpeg"
+            ))
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // Try fswebcam first
+            let result = Command::new("fswebcam")
+                .args(&["-r", "1280x720", "--jpeg", "95", "--no-banner", path])
+                .output();
+
+            if result.is_ok() && result.unwrap().status.success() {
+                return Ok(());
+            }
+
+            // Try ffmpeg
+            let result = Command::new("ffmpeg")
+                .args(&["-f", "v4l2", "-i", "/dev/video0", "-vframes", "1", "-y", path])
+                .output();
+
+            if result.is_ok() && result.unwrap().status.success() {
+                return Ok(());
+            }
+
+            Err(anyhow!(
+                "Failed to capture image. Please install camera utilities:\n\
+                sudo apt-get install fswebcam\n\
+                or\n\
+                sudo apt-get install ffmpeg"
+            ))
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // For Windows, we could use PowerShell or external utilities
+            Err(anyhow!("Camera capture on Windows not implemented yet"))
+        }
+    }
+
+    pub fn capture_and_save(&mut self, path: &str) -> Result<()> {
+        // Create directory if it doesn't exist
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("Failed to create directory {}: {}", parent.display(), e))?;
+        }
 
         println!("Camera ready! Press ENTER to capture your photo...");
 
@@ -84,36 +167,10 @@ impl CameraCapture {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
 
-        // Capture frame
         println!("Capturing image...");
-        let frame = self.camera.frame()
-            .map_err(|e| anyhow!("Failed to capture frame: {}", e))?;
 
-        // Close camera
-        let _ = self.camera.stop_stream();
-
-        // Convert frame to image
-        let decoded = frame.decode_image::<RgbFormat>()
-            .map_err(|e| anyhow!("Failed to decode image: {}", e))?;
-
-        let (width, height) = (decoded.width(), decoded.height());
-        let raw_data = decoded.into_raw();
-
-        let img_buffer = ImageBuffer::from_raw(width, height, raw_data)
-            .ok_or_else(|| anyhow!("Failed to create image buffer"))?;
-
-        println!("✓ Image captured successfully!");
-
-        Ok(img_buffer)
-    }
-
-    pub fn capture_and_save(&mut self, path: &str) -> Result<()> {
-        let img_buffer = self.capture_image()?;
-
-        // Convert RGB to DynamicImage and save
-        let dynamic_img = image::DynamicImage::ImageRgb8(img_buffer);
-        dynamic_img.save(path)
-            .map_err(|e| anyhow!("Failed to save image: {}", e))?;
+        // Capture directly to the target path
+        self.capture_to_file(path)?;
 
         println!("Image saved to: {}", path);
         Ok(())

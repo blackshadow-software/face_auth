@@ -2,6 +2,7 @@ use crate::face_detection::FaceDetector;
 use crate::face_storage::FaceDatabase;
 use crate::camera::CameraCapture;
 use anyhow::{Result, anyhow};
+use chrono;
 
 pub fn register_face(image_path: &str) -> Result<()> {
     println!("Initializing face detector...");
@@ -53,17 +54,18 @@ pub fn register_face_from_camera() -> Result<()> {
     let mut camera = CameraCapture::new()?;
     let detector = FaceDetector::new()?;
 
-    // Capture image from camera
-    let temp_image_path = "temp_registration.jpg";
-    camera.capture_and_save(temp_image_path)?;
+    // Capture image from camera with timestamp in dedicated directory
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let temp_image_path = format!("captured_images/registration_{}.jpg", timestamp);
+    camera.capture_and_save(&temp_image_path)?;
 
     // Detect faces in captured image
     println!("Detecting faces in captured image...");
-    let faces = detector.detect_faces(temp_image_path)?;
+    let faces = detector.detect_faces(&temp_image_path)?;
 
     if faces.is_empty() {
-        // Clean up temp file
-        let _ = std::fs::remove_file(temp_image_path);
+        // Keep the image file for debugging
+        println!("Captured image saved as: {}", temp_image_path);
         return Err(anyhow!("No faces detected in the captured image. Please ensure your face is clearly visible and try again."));
     }
 
@@ -94,9 +96,8 @@ pub fn register_face_from_camera() -> Result<()> {
     // Add new face to database
     database.add_face(user_id.clone(), face.features.clone())?;
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(temp_image_path);
-
+    // Keep the captured image for reference
+    println!("Registration image saved as: {}", temp_image_path);
     println!("Successfully registered face for user '{}'", user_id);
     println!("Extracted {} feature points", face.features.len());
 
