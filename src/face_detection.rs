@@ -1,291 +1,321 @@
 use image::{imageops, GrayImage};
 use anyhow::{Result, anyhow};
-
-pub struct FaceDetector;
+use ndarray::Array2;
 
 #[derive(Debug, Clone)]
 pub struct FaceInfo {
+    pub bbox: BoundingBox,
+    pub landmarks: Vec<Point>,
     pub features: Vec<f64>,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundingBox {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub struct FaceDetector {
+    feature_extractor: AdvancedFeatureExtractor,
 }
 
 impl FaceDetector {
     pub fn new() -> Result<Self> {
-        Ok(FaceDetector)
+        println!("Initializing optimized face detector...");
+
+        Ok(FaceDetector {
+            feature_extractor: AdvancedFeatureExtractor::new(),
+        })
     }
 
     pub fn detect_faces(&self, image_path: &str) -> Result<Vec<FaceInfo>> {
-        // Load and process image
+        println!("Loading and preprocessing image: {}", image_path);
+
+        // Load image
         let img = image::open(image_path)
             .map_err(|e| anyhow!("Could not load image {}: {}", image_path, e))?;
 
-        // Convert to grayscale and get dimensions
+        // Convert to grayscale for processing
         let gray_img = img.to_luma8();
         let (width, height) = gray_img.dimensions();
 
         println!("Processing image: {}x{}", width, height);
 
-        // Improved face detection: focus on center region where faces are typically located
-        // This reduces background noise significantly
-        let center_crop_factor = 0.7; // Use central 70% of the image
-        let margin_x = ((width as f32) * (1.0 - center_crop_factor) / 2.0) as u32;
-        let margin_y = ((height as f32) * (1.0 - center_crop_factor) / 2.0) as u32;
+        // Simple and fast face detection - focus on center region
+        let face_bbox = self.detect_center_face_region(width, height)?;
 
-        let crop_width = width - (2 * margin_x);
-        let crop_height = height - (2 * margin_y);
+        println!("Face region detected at center");
 
-        // Crop to center region (likely face area)
-        let face_region = imageops::crop_imm(&gray_img, margin_x, margin_y, crop_width, crop_height);
+        // Convert image to ndarray for processing
+        let img_array = self.image_to_array(&gray_img)?;
 
-        println!("Focused on center region: {}x{} (cropped from {}x{})",
-                 crop_width, crop_height, width, height);
+        // Extract face region
+        let face_region = self.extract_face_region(&img_array, &face_bbox)?;
 
-        // Apply brightness enhancement and histogram equalization for low-light conditions
-        let brightened = self.enhance_brightness(&face_region.to_image(), 1.3)?; // 30% brightness boost
-        let equalized = self.histogram_equalize(&brightened)?;
+        // Detect facial landmarks (estimated)
+        let landmarks = self.detect_landmarks(&face_bbox)?;
 
-        // Resize to standard size for consistent feature extraction
-        let resized = imageops::resize(&equalized, 128, 128, imageops::FilterType::Lanczos3);
+        // Extract advanced features
+        let features = self.feature_extractor.extract_features(&face_region)?;
 
-        // Extract features from the face region
-        let features = self.extract_features(&resized)?;
+        // Calculate confidence based on image quality
+        let confidence = self.calculate_confidence(width, height)?;
 
-        println!("Successfully extracted {} features from face region", features.len());
-
-        Ok(vec![FaceInfo { features }])
+        Ok(vec![FaceInfo {
+            bbox: face_bbox,
+            landmarks,
+            features,
+            confidence,
+        }])
     }
 
-    fn enhance_brightness(&self, img: &GrayImage, factor: f32) -> Result<GrayImage> {
+    fn detect_center_face_region(&self, width: u32, height: u32) -> Result<BoundingBox> {
+        // Simple approach: assume face is in center region
+        let face_size = (width.min(height) / 3).max(100).min(300); // Face size between 100-300px
+        let x = (width - face_size) / 2;
+        let y = (height - face_size) / 2;
+
+        Ok(BoundingBox {
+            x,
+            y,
+            width: face_size,
+            height: face_size,
+        })
+    }
+
+    fn image_to_array(&self, img: &GrayImage) -> Result<Array2<u8>> {
         let (width, height) = img.dimensions();
-        let mut enhanced = GrayImage::new(width, height);
+        let mut array = Array2::zeros((height as usize, width as usize));
 
         for (x, y, pixel) in img.enumerate_pixels() {
-            let old_value = pixel[0] as f32;
-            let new_value = (old_value * factor).min(255.0) as u8;
-            enhanced.put_pixel(x, y, image::Luma([new_value]));
+            array[[y as usize, x as usize]] = pixel[0];
         }
 
-        Ok(enhanced)
+        Ok(array)
     }
 
-    fn histogram_equalize(&self, img: &GrayImage) -> Result<GrayImage> {
-        let (width, height) = img.dimensions();
-        let mut histogram = vec![0u32; 256];
+    fn extract_face_region(&self, img: &Array2<u8>, bbox: &BoundingBox) -> Result<Array2<u8>> {
+        let (img_height, img_width) = img.dim();
 
-        // Calculate histogram
-        for pixel in img.pixels() {
-            histogram[pixel[0] as usize] += 1;
+        let x1 = bbox.x as usize;
+        let y1 = bbox.y as usize;
+        let x2 = ((bbox.x + bbox.width) as usize).min(img_width);
+        let y2 = ((bbox.y + bbox.height) as usize).min(img_height);
+
+        if x2 <= x1 || y2 <= y1 {
+            return Err(anyhow!("Invalid face region"));
         }
 
-        // Calculate cumulative distribution
-        let total_pixels = (width * height) as f64;
-        let mut cdf = vec![0.0; 256];
-        cdf[0] = histogram[0] as f64 / total_pixels;
-
-        for i in 1..256 {
-            cdf[i] = cdf[i-1] + (histogram[i] as f64 / total_pixels);
-        }
-
-        // Create equalized image
-        let mut equalized = GrayImage::new(width, height);
-        for (x, y, pixel) in img.enumerate_pixels() {
-            let old_value = pixel[0] as usize;
-            let new_value = (cdf[old_value] * 255.0) as u8;
-            equalized.put_pixel(x, y, image::Luma([new_value]));
-        }
-
-        Ok(equalized)
+        let face_region = img.slice(ndarray::s![y1..y2, x1..x2]).to_owned();
+        Ok(face_region)
     }
 
-    fn extract_features(&self, img: &image::GrayImage) -> Result<Vec<f64>> {
-        let mut features = Vec::new();
-        let (width, height) = img.dimensions();
+    fn detect_landmarks(&self, bbox: &BoundingBox) -> Result<Vec<Point>> {
+        // Estimate key facial landmarks based on face proportions
+        let face_width = bbox.width as f64;
+        let face_height = bbox.height as f64;
 
-        // Face-specific feature extraction
+        let landmarks = vec![
+            // Left eye
+            Point { x: bbox.x as f64 + face_width * 0.3, y: bbox.y as f64 + face_height * 0.35 },
+            // Right eye
+            Point { x: bbox.x as f64 + face_width * 0.7, y: bbox.y as f64 + face_height * 0.35 },
+            // Nose tip
+            Point { x: bbox.x as f64 + face_width * 0.5, y: bbox.y as f64 + face_height * 0.55 },
+            // Left mouth corner
+            Point { x: bbox.x as f64 + face_width * 0.35, y: bbox.y as f64 + face_height * 0.75 },
+            // Right mouth corner
+            Point { x: bbox.x as f64 + face_width * 0.65, y: bbox.y as f64 + face_height * 0.75 },
+        ];
 
-        // 1. Divide face into regions (eyes, nose, mouth areas)
-        let region_features = self.extract_regional_features(img)?;
-        features.extend(region_features);
-
-        // 2. Extract edge features (important for face structure)
-        let edge_features = self.extract_edge_features(img)?;
-        features.extend(edge_features);
-
-        // 3. Extract texture features using Local Binary Patterns
-        let texture_features = self.extract_texture_features(img)?;
-        features.extend(texture_features);
-
-        // 4. Extract geometric ratios (face proportions)
-        let geometric_features = self.extract_geometric_features(img)?;
-        features.extend(geometric_features);
-
-        println!("Extracted {} face-specific features", features.len());
-        Ok(features)
+        Ok(landmarks)
     }
 
-    fn extract_regional_features(&self, img: &image::GrayImage) -> Result<Vec<f64>> {
-        let mut features = Vec::new();
-        let (width, height) = img.dimensions();
-
-        // Divide face into 9 regions (3x3 grid)
-        let region_width = width / 3;
-        let region_height = height / 3;
-
-        for ry in 0..3 {
-            for rx in 0..3 {
-                let start_x = rx * region_width;
-                let start_y = ry * region_height;
-                let end_x = ((rx + 1) * region_width).min(width);
-                let end_y = ((ry + 1) * region_height).min(height);
-
-                // Calculate mean intensity for this region
-                let mut sum = 0.0;
-                let mut count = 0;
-
-                for y in start_y..end_y {
-                    for x in start_x..end_x {
-                        sum += img.get_pixel(x, y)[0] as f64;
-                        count += 1;
-                    }
-                }
-
-                let mean = if count > 0 { sum / count as f64 } else { 0.0 };
-                features.push(mean / 255.0); // Normalize
-
-                // Calculate variance for this region
-                let mut var_sum = 0.0;
-                for y in start_y..end_y {
-                    for x in start_x..end_x {
-                        let diff = img.get_pixel(x, y)[0] as f64 - mean;
-                        var_sum += diff * diff;
-                    }
-                }
-                let variance = if count > 0 { var_sum / count as f64 } else { 0.0 };
-                features.push(variance / (255.0 * 255.0)); // Normalize
-            }
-        }
-
-        Ok(features)
-    }
-
-    fn extract_edge_features(&self, img: &image::GrayImage) -> Result<Vec<f64>> {
-        let mut features = Vec::new();
-        let (width, height) = img.dimensions();
-
-        // Simple edge detection using Sobel-like operator
-        let mut edge_strength = 0.0;
-        let mut edge_count = 0;
-
-        for y in 1..height-1 {
-            for x in 1..width-1 {
-                // Horizontal gradient
-                let gx = (img.get_pixel(x+1, y)[0] as f64) - (img.get_pixel(x-1, y)[0] as f64);
-                // Vertical gradient
-                let gy = (img.get_pixel(x, y+1)[0] as f64) - (img.get_pixel(x, y-1)[0] as f64);
-
-                let gradient_magnitude = (gx * gx + gy * gy).sqrt();
-                edge_strength += gradient_magnitude;
-                edge_count += 1;
-            }
-        }
-
-        let avg_edge_strength = if edge_count > 0 { edge_strength / edge_count as f64 } else { 0.0 };
-        features.push(avg_edge_strength / 255.0); // Normalize
-
-        Ok(features)
-    }
-
-    fn extract_texture_features(&self, img: &image::GrayImage) -> Result<Vec<f64>> {
-        let mut features = Vec::new();
-        let (width, height) = img.dimensions();
-
-        // Enhanced Local Binary Pattern
-        let mut lbp_histogram = vec![0u32; 256];
-
-        for y in 1..height-1 {
-            for x in 1..width-1 {
-                let center_pixel = img.get_pixel(x, y)[0];
-                let mut lbp_value = 0u8;
-
-                // 8 neighbors in circular pattern
-                let neighbors = [
-                    img.get_pixel(x-1, y-1)[0], img.get_pixel(x, y-1)[0], img.get_pixel(x+1, y-1)[0],
-                    img.get_pixel(x+1, y)[0], img.get_pixel(x+1, y+1)[0], img.get_pixel(x, y+1)[0],
-                    img.get_pixel(x-1, y+1)[0], img.get_pixel(x-1, y)[0]
-                ];
-
-                for (i, &neighbor) in neighbors.iter().enumerate() {
-                    if neighbor >= center_pixel {
-                        lbp_value |= 1 << i;
-                    }
-                }
-
-                lbp_histogram[lbp_value as usize] += 1;
-            }
-        }
-
-        // Use only the most significant LBP bins (reduce from 256 to 32)
-        let total_pixels = (width - 2) * (height - 2);
-        for i in (0..256).step_by(8) {
-            let bin_sum: u32 = lbp_histogram[i..i.min(256).min(i+8)].iter().sum();
-            features.push(bin_sum as f64 / total_pixels as f64);
-        }
-
-        Ok(features)
-    }
-
-    fn extract_geometric_features(&self, img: &image::GrayImage) -> Result<Vec<f64>> {
-        let mut features = Vec::new();
-        let (width, height) = img.dimensions();
-
-        // Face proportion ratios
-        features.push(width as f64 / height as f64); // Aspect ratio
-
-        // Symmetry measure (compare left vs right half)
-        let mut symmetry_diff = 0.0;
-        let mid_x = width / 2;
-
-        for y in 0..height {
-            for x in 0..mid_x {
-                let left_pixel = img.get_pixel(x, y)[0] as f64;
-                let right_pixel = img.get_pixel(width - 1 - x, y)[0] as f64;
-                symmetry_diff += (left_pixel - right_pixel).abs();
-            }
-        }
-
-        let symmetry = 1.0 - (symmetry_diff / (255.0 * (mid_x * height) as f64));
-        features.push(symmetry.max(0.0)); // Ensure non-negative
-
-        Ok(features)
+    fn calculate_confidence(&self, width: u32, height: u32) -> Result<f64> {
+        // Simple confidence based on image size
+        let size_score = if width >= 640 && height >= 480 { 0.9 } else { 0.7 };
+        Ok(size_score)
     }
 
     pub fn compute_similarity(features1: &[f64], features2: &[f64]) -> f64 {
-        if features1.len() != features2.len() {
+        if features1.len() != features2.len() || features1.is_empty() {
             return 0.0;
         }
 
-        // Use Euclidean distance with exponential decay for better discrimination
-        let mut squared_diff_sum = 0.0;
-        let mut weight_sum = 0.0;
+        // Use cosine similarity for better face matching
+        let dot_product: f64 = features1.iter().zip(features2.iter())
+            .map(|(a, b)| a * b)
+            .sum();
 
-        for (i, (&f1, &f2)) in features1.iter().zip(features2.iter()).enumerate() {
-            let diff = f1 - f2;
-            let weight = if i < 18 { 3.0 } else if i < 50 { 2.0 } else { 1.0 }; // Weight regional features more
-            squared_diff_sum += weight * diff * diff;
-            weight_sum += weight;
-        }
+        let norm1: f64 = features1.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let norm2: f64 = features2.iter().map(|x| x * x).sum::<f64>().sqrt();
 
-        if weight_sum == 0.0 {
+        if norm1 == 0.0 || norm2 == 0.0 {
             return 0.0;
         }
 
-        // Average weighted squared difference
-        let mean_squared_diff = squared_diff_sum / weight_sum;
+        let cosine_similarity = dot_product / (norm1 * norm2);
 
-        // Convert to similarity using exponential decay (more discriminative)
-        // This will give much lower scores for different faces
-        let similarity = (-mean_squared_diff * 100.0).exp(); // Scale factor for more discrimination
+        // Convert to range [0, 1] and apply nonlinear scaling for better discrimination
+        let similarity = (cosine_similarity + 1.0) / 2.0;
 
-        // Ensure we get meaningful differences between same person vs different people
-        similarity.min(1.0).max(0.0)
+        // Apply exponential scaling to enhance differences
+        similarity.powf(1.5).min(1.0).max(0.0)
+    }
+}
+
+struct AdvancedFeatureExtractor;
+
+impl AdvancedFeatureExtractor {
+    fn new() -> Self {
+        AdvancedFeatureExtractor
+    }
+
+    fn extract_features(&self, face: &Array2<u8>) -> Result<Vec<f64>> {
+        println!("Extracting features from face region...");
+
+        let mut features = Vec::new();
+
+        // Convert to standard size for consistent feature extraction
+        let resized = self.resize_face(face, 64, 64)?; // Smaller size for faster processing
+
+        // Extract simplified but effective features
+
+        // 1. Regional intensity statistics (simplified)
+        let regional_features = self.extract_regional_features(&resized)?;
+        features.extend(regional_features);
+
+        // 2. Edge features (simplified)
+        let edge_features = self.extract_edge_features(&resized)?;
+        features.extend(edge_features);
+
+        // 3. Symmetry features
+        let symmetry_features = self.extract_symmetry_features(&resized)?;
+        features.extend(symmetry_features);
+
+        // Normalize features to unit vector for cosine similarity
+        let norm: f64 = features.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            features.iter_mut().for_each(|x| *x /= norm);
+        }
+
+        println!("Extracted {} normalized features", features.len());
+        Ok(features)
+    }
+
+    fn resize_face(&self, face: &Array2<u8>, target_width: usize, target_height: usize) -> Result<Array2<u8>> {
+        let (height, width) = face.dim();
+
+        // Simple nearest neighbor resize for speed
+        let mut resized = Array2::zeros((target_height, target_width));
+
+        for y in 0..target_height {
+            for x in 0..target_width {
+                let src_x = (x * width / target_width).min(width - 1);
+                let src_y = (y * height / target_height).min(height - 1);
+                resized[[y, x]] = face[[src_y, src_x]];
+            }
+        }
+
+        Ok(resized)
+    }
+
+    fn extract_regional_features(&self, face: &Array2<u8>) -> Result<Vec<f64>> {
+        let mut features = Vec::new();
+        let (height, width) = face.dim();
+
+        // Extract features from 4x4 grid regions
+        let grid_size = 4;
+        let step_x = width / grid_size;
+        let step_y = height / grid_size;
+
+        for y in 0..grid_size {
+            for x in 0..grid_size {
+                let start_x = x * step_x;
+                let start_y = y * step_y;
+                let end_x = ((x + 1) * step_x).min(width);
+                let end_y = ((y + 1) * step_y).min(height);
+
+                if start_x < width && start_y < height && end_x > start_x && end_y > start_y {
+                    let region = face.slice(ndarray::s![start_y..end_y, start_x..end_x]);
+
+                    // Calculate mean intensity
+                    let mean = region.iter().map(|&x| x as f64).sum::<f64>() / region.len() as f64;
+                    features.push(mean / 255.0);
+                }
+            }
+        }
+
+        Ok(features)
+    }
+
+    fn extract_edge_features(&self, face: &Array2<u8>) -> Result<Vec<f64>> {
+        let (height, width) = face.dim();
+        let mut edge_features = Vec::new();
+
+        // Calculate horizontal and vertical edge strength
+        let mut h_edges = 0.0;
+        let mut v_edges = 0.0;
+        let mut count = 0;
+
+        for y in 1..height-1 {
+            for x in 1..width-1 {
+                // Horizontal edge (difference between top and bottom)
+                let h_diff = (face[[y-1, x]] as f64 - face[[y+1, x]] as f64).abs();
+                // Vertical edge (difference between left and right)
+                let v_diff = (face[[y, x-1]] as f64 - face[[y, x+1]] as f64).abs();
+
+                h_edges += h_diff;
+                v_edges += v_diff;
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            edge_features.push(h_edges / (count as f64 * 255.0));
+            edge_features.push(v_edges / (count as f64 * 255.0));
+        } else {
+            edge_features.push(0.0);
+            edge_features.push(0.0);
+        }
+
+        Ok(edge_features)
+    }
+
+    fn extract_symmetry_features(&self, face: &Array2<u8>) -> Result<Vec<f64>> {
+        let (height, width) = face.dim();
+        let mid_x = width / 2;
+
+        let mut symmetry_diff = 0.0;
+        let mut count = 0;
+
+        // Calculate vertical symmetry
+        for y in 0..height {
+            for x in 0..mid_x {
+                if width > x {
+                    let left_val = face[[y, x]] as f64;
+                    let right_val = face[[y, width - 1 - x]] as f64;
+                    symmetry_diff += (left_val - right_val).abs();
+                    count += 1;
+                }
+            }
+        }
+
+        let symmetry = if count > 0 {
+            1.0 - (symmetry_diff / (count as f64 * 255.0))
+        } else {
+            0.0
+        };
+
+        Ok(vec![symmetry.max(0.0)])
     }
 }

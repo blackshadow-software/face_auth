@@ -1,2 +1,23 @@
 /target
 *.lock
+
+# Python virtual environment
+face_auth_env/
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Face authentication data
+captured_images/
+python_face_database.json
+face_database*.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
