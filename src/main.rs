@@ -1,16 +1,9 @@
 use anyhow::Result;
 use std::io::{self, Write};
 
-mod face_detection;
-mod face_storage;
-mod registration;
-mod authentication;
-mod camera;
-mod python_integration;
+mod standalone_python;
 
-use registration::register_face_from_camera;
-use authentication::authenticate_face_from_camera;
-use python_integration::PythonFaceAuth;
+use standalone_python::StandalonePythonFaceAuth;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,13 +18,14 @@ async fn main() -> Result<()> {
         println!("macOS may ask for permission - please click 'Allow'.");
         println!();
         println!("Please select an option:");
-        println!("1. Register - Capture and register your face (Rust - Fast)");
-        println!("2. Check - Authenticate your face (Rust - Fast)");
-        println!("3. Python Register - High accuracy registration (99%+)");
-        println!("4. Python Auth - High accuracy authentication (99%+)");
-        println!("5. Exit");
+        println!("1. Register - High accuracy (99%+)");
+        println!("2. Authenticate - High accuracy (99%+)");
+        println!("3. Export User - Export user credentials to file");
+        println!("4. Import User - Import user credentials from file");
+        println!("5. List Users - Show all registered users");
+        println!("6. Exit");
         println!();
-        print!("Enter your choice (1-5): ");
+        print!("Enter your choice (1-6): ");
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
@@ -43,112 +37,135 @@ async fn main() -> Result<()> {
 
         match choice {
             "1" => {
-                println!("\n--- Face Registration Mode ---");
-                println!("This will capture your face using the camera and register it for authentication.");
-                println!();
-
-                match register_face_from_camera() {
-                    Ok(_) => {
-                        println!("\n✓ Face registration completed successfully!");
-                        println!();
-                        print!("Press ENTER to return to main menu...");
-                        io::stdout().flush().unwrap();
-                        let _ = io::stdin().read_line(&mut String::new());
-                    },
-                    Err(e) => {
-                        println!("\n❌ Registration failed: {}", e);
-                        println!();
-                        println!("Would you like to:");
-                        println!("1. Try again");
-                        println!("2. Return to main menu");
-                        print!("Enter choice (1 or 2): ");
-                        io::stdout().flush().unwrap();
-
-                        let mut retry_input = String::new();
-                        if io::stdin().read_line(&mut retry_input).is_ok() && retry_input.trim() == "1" {
-                            continue; // This will restart the main loop, showing the menu again
-                        }
-                    }
-                }
-            },
-            "2" => {
-                println!("\n--- Face Authentication Mode ---");
-                println!("This will capture your face using the camera and check if it matches the registered face.");
-                println!();
-
-                match authenticate_face_from_camera() {
-                    Ok(result) => {
-                        if result.is_match {
-                            println!("\n✅ Authentication successful!");
-                            println!("🎯 Confidence: {:.1}%", result.confidence * 100.0);
-                            println!("🎚️  Threshold: {:.1}%", result.similarity_threshold * 100.0);
-                            println!("👤 User: {}", result.matched_user_id.as_ref().unwrap_or(&"Unknown".to_string()));
-                            println!("⚡ Processing time: {}ms", result.processing_time_ms);
-                            println!("🔍 Face detection confidence: {:.1}%", result.face_detection_confidence * 100.0);
-                            println!("🎉 Welcome! Access granted.");
-                        } else {
-                            println!("\n❌ Authentication failed!");
-                            println!("🎯 Confidence: {:.1}%", result.confidence * 100.0);
-                            println!("🎚️  Required threshold: {:.1}%", result.similarity_threshold * 100.0);
-                            if let Some(user_id) = &result.matched_user_id {
-                                println!("👤 Closest match: {}", user_id);
-                            }
-                            println!("⚡ Processing time: {}ms", result.processing_time_ms);
-                            println!("🔍 Face detection confidence: {:.1}%", result.face_detection_confidence * 100.0);
-                            println!("🔒 Access denied. Please try again or register your face.");
-                        }
-                        println!();
-                        print!("Press ENTER to return to main menu...");
-                        io::stdout().flush().unwrap();
-                        let _ = io::stdin().read_line(&mut String::new());
-                    },
-                    Err(e) => {
-                        println!("\n❌ Authentication failed: {}", e);
-                        println!();
-                        println!("Would you like to:");
-                        println!("1. Try again");
-                        println!("2. Return to main menu");
-                        print!("Enter choice (1 or 2): ");
-                        io::stdout().flush().unwrap();
-
-                        let mut retry_input = String::new();
-                        if io::stdin().read_line(&mut retry_input).is_ok() && retry_input.trim() == "1" {
-                            continue; // This will restart the main loop, showing the menu again
-                        }
-                    }
-                }
-            },
-            "3" => {
-                println!("\n--- 🐍 Python High-Accuracy Registration ---");
+                println!("\n--- 🐍 High-Accuracy Face Registration ---");
                 println!("This uses Python's face_recognition library for 99%+ accuracy");
+                println!("🎯 Industry-standard face detection and recognition!");
                 println!();
 
-                match PythonFaceAuth::new() {
-                    Ok(python_auth) => {
-                        match python_auth.check_python_environment() {
+                match StandalonePythonFaceAuth::new() {
+                    Ok(standalone_auth) => {
+                        match standalone_auth.check_executable() {
                             Ok(_) => {
-                                match python_auth.register_user("user", 3) {
-                                    Ok(true) => {
-                                        println!("\n🎉 Python registration completed successfully!");
-                                        println!("✅ High-accuracy face model trained!");
-                                    },
-                                    Ok(false) => {
-                                        println!("\n❌ Python registration failed");
-                                    },
-                                    Err(e) => {
-                                        println!("\n❌ Registration error: {}", e);
+                                print!("Enter username for registration: ");
+                                io::stdout().flush().unwrap();
+                                let mut username = String::new();
+                                if io::stdin().read_line(&mut username).is_ok() {
+                                    let username = username.trim();
+
+                                    match standalone_auth.register_user(username, 3) {
+                                        Ok(true) => {
+                                            println!("\n🎉 Standalone Python registration successful!");
+                                            println!("✅ High-accuracy face model trained with standalone executable!");
+                                            println!("📦 No Python installation was required!");
+                                        },
+                                        Ok(false) => {
+                                            println!("\n❌ Standalone Python registration failed");
+                                            println!("💡 Make sure you're positioned in front of the camera");
+                                        },
+                                        Err(e) => {
+                                            println!("\n❌ Registration error: {}", e);
+                                        }
                                     }
                                 }
                             },
                             Err(e) => {
-                                println!("\n❌ Python environment error: {}", e);
-                                println!("💡 Please run: ./setup_python_env.sh");
+                                println!("\n❌ Standalone executable error: {}", e);
+                                println!("💡 Make sure you've built the standalone executable first");
+                                println!("💡 Run: pyinstaller --onefile --console --add-data=\"face_auth_env/lib/python3.9/site-packages/face_recognition_models/models/*:face_recognition_models/models/\" python_face_auth_simple.py");
                             }
                         }
                     },
                     Err(e) => {
-                        println!("\n❌ Python initialization error: {}", e);
-                        println!("💡 Please run: ./setup_python_env.sh");
+                        println!("\n❌ Failed to initialize standalone Python: {}", e);
+                    }
+                }
+
+                println!();
+                print!("Press ENTER to return to main menu...");
+                io::stdout().flush().unwrap();
+                let _ = io::stdin().read_line(&mut String::new());
+            },
+            "2" => {
+                println!("\n--- 🐍 High-Accuracy Face Authentication ---");
+                println!("This uses Python's face_recognition library for 99%+ accuracy");
+                println!("🎯 Industry-standard face detection and recognition!");
+                println!();
+
+                match StandalonePythonFaceAuth::new() {
+                    Ok(standalone_auth) => {
+                        match standalone_auth.check_executable() {
+                            Ok(_) => {
+                                match standalone_auth.authenticate_user(0.4) {
+                                    Ok(result) => {
+                                        if result.is_match.unwrap_or(false) {
+                                            println!("\n✅ Standalone Python Authentication Successful!");
+                                            println!("🎯 Confidence: {:.1}%", result.confidence.unwrap_or(0.0) * 100.0);
+                                            println!("📏 Distance: {:.3}", result.distance.unwrap_or(0.0));
+                                            println!("👤 User: {}", result.matched_user.as_ref().unwrap_or(&"Unknown".to_string()));
+                                            println!("⚡ Processing time: {}ms", result.processing_time_ms.unwrap_or(0));
+                                            println!("📦 No Python installation was required!");
+                                            println!("🎉 Access granted with standalone executable!");
+                                        } else {
+                                            println!("\n❌ Standalone Python Authentication Failed!");
+                                            println!("🎯 Confidence: {:.1}%", result.confidence.unwrap_or(0.0) * 100.0);
+                                            println!("📏 Distance: {:.3}", result.distance.unwrap_or(0.0));
+                                            println!("🎚️  Threshold: {:.3}", result.threshold.unwrap_or(0.0));
+                                            println!("⚡ Processing time: {}ms", result.processing_time_ms.unwrap_or(0));
+                                            println!("🔒 Access denied. Please try again or register first.");
+                                        }
+                                    },
+                                    Err(e) => {
+                                        println!("\n❌ Authentication error: {}", e);
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                println!("\n❌ Standalone executable error: {}", e);
+                                println!("💡 Make sure you've built the standalone executable first");
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        println!("\n❌ Failed to initialize standalone Python: {}", e);
+                    }
+                }
+
+                println!();
+                print!("Press ENTER to return to main menu...");
+                io::stdout().flush().unwrap();
+                let _ = io::stdin().read_line(&mut String::new());
+            },
+            "3" => {
+                println!("\n--- 📤 Export User Credentials ---");
+                println!("Export a user's face data to share with another device");
+                println!();
+
+                print!("Enter username to export: ");
+                io::stdout().flush().unwrap();
+                let mut username = String::new();
+                if io::stdin().read_line(&mut username).is_ok() {
+                    let username = username.trim();
+
+                    match StandalonePythonFaceAuth::new() {
+                        Ok(standalone_auth) => {
+                            match standalone_auth.export_user(username, "") {
+                                Ok(true) => {
+                                    println!("\n✅ User '{}' exported successfully!", username);
+                                    println!("📁 File saved in 'exported_credentials/' directory");
+                                    println!("🔄 You can copy this file to another device");
+                                    println!("🔄 Use 'Import User' on the target device to add this user");
+                                },
+                                Ok(false) => {
+                                    println!("\n❌ Export failed. User '{}' may not exist.", username);
+                                },
+                                Err(e) => {
+                                    println!("\n❌ Export error: {}", e);
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            println!("\n❌ System error: {}", e);
+                        }
                     }
                 }
 
@@ -158,46 +175,34 @@ async fn main() -> Result<()> {
                 let _ = io::stdin().read_line(&mut String::new());
             },
             "4" => {
-                println!("\n--- 🐍 Python High-Accuracy Authentication ---");
-                println!("This uses Python's face_recognition library for 99%+ accuracy");
+                println!("\n--- 📥 Import User Credentials ---");
+                println!("Import a user's face data from another device");
                 println!();
 
-                match PythonFaceAuth::new() {
-                    Ok(python_auth) => {
-                        match python_auth.check_python_environment() {
-                            Ok(_) => {
-                                match python_auth.authenticate_user(0.6) {
-                                    Ok(result) => {
-                                        if result.success && result.is_match.unwrap_or(false) {
-                                            println!("\n✅ Python Authentication Successful!");
-                                            println!("🎯 Confidence: {:.1}%", result.confidence.unwrap_or(0.0) * 100.0);
-                                            println!("📏 Distance: {:.3}", result.distance.unwrap_or(0.0));
-                                            println!("👤 User: {}", result.matched_user.as_ref().unwrap_or(&"Unknown".to_string()));
-                                            println!("⚡ Processing time: {}ms", result.processing_time_ms.unwrap_or(0));
-                                            println!("🎉 Access granted with high accuracy!");
-                                        } else {
-                                            println!("\n❌ Python Authentication Failed!");
-                                            println!("🎯 Confidence: {:.1}%", result.confidence.unwrap_or(0.0) * 100.0);
-                                            println!("📏 Distance: {:.3}", result.distance.unwrap_or(0.0));
-                                            println!("🎚️  Threshold: {:.3}", result.threshold.unwrap_or(0.0));
-                                            println!("⚡ Processing time: {}ms", result.processing_time_ms.unwrap_or(0));
-                                            println!("🔒 Access denied.");
-                                        }
-                                    },
-                                    Err(e) => {
-                                        println!("\n❌ Authentication error: {}", e);
-                                    }
+                print!("Enter filename to import (from exported_credentials/ or full path): ");
+                io::stdout().flush().unwrap();
+                let mut filename = String::new();
+                if io::stdin().read_line(&mut filename).is_ok() {
+                    let filename = filename.trim();
+
+                    match StandalonePythonFaceAuth::new() {
+                        Ok(standalone_auth) => {
+                            match standalone_auth.import_user(filename) {
+                                Ok(true) => {
+                                    println!("\n✅ User imported successfully from '{}'", filename);
+                                    println!("👤 User is now available for authentication");
+                                },
+                                Ok(false) => {
+                                    println!("\n❌ Import failed. Check if file exists and is valid.");
+                                },
+                                Err(e) => {
+                                    println!("\n❌ Import error: {}", e);
                                 }
-                            },
-                            Err(e) => {
-                                println!("\n❌ Python environment error: {}", e);
-                                println!("💡 Please run: ./setup_python_env.sh");
                             }
+                        },
+                        Err(e) => {
+                            println!("\n❌ System error: {}", e);
                         }
-                    },
-                    Err(e) => {
-                        println!("\n❌ Python initialization error: {}", e);
-                        println!("💡 Please run: ./setup_python_env.sh");
                     }
                 }
 
@@ -207,12 +212,37 @@ async fn main() -> Result<()> {
                 let _ = io::stdin().read_line(&mut String::new());
             },
             "5" => {
+                println!("\n--- 👥 Registered Users ---");
+                println!();
+
+                match StandalonePythonFaceAuth::new() {
+                    Ok(standalone_auth) => {
+                        match standalone_auth.list_users() {
+                            Ok(_) => {
+                                // Success message already printed by Python script
+                            },
+                            Err(e) => {
+                                println!("❌ Error listing users: {}", e);
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        println!("❌ System error: {}", e);
+                    }
+                }
+
+                println!();
+                print!("Press ENTER to return to main menu...");
+                io::stdout().flush().unwrap();
+                let _ = io::stdin().read_line(&mut String::new());
+            },
+            "6" => {
                 println!("\nThank you for using Face Authentication System!");
                 println!("Goodbye! 👋");
                 break;
             },
             _ => {
-                println!("\n❌ Invalid choice. Please select 1-5.");
+                println!("\n❌ Invalid choice. Please select 1-6.");
                 println!();
                 print!("Press ENTER to continue...");
                 io::stdout().flush().unwrap();

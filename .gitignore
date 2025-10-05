@@ -14,6 +14,10 @@ __pycache__/
 captured_images/
 python_face_database.json
 face_database*.json
+exported_credentials/
+*_credentials*.json
+generated/
+source/
 
 # macOS
 .DS_Store
@@ -21,3 +25,11 @@ face_database*.json
 # IDE
 .vscode/
 .idea/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Rust embedded Python artifacts
+src/embedded_python.rs

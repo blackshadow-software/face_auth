@@ -129,11 +129,12 @@ class SimpleFaceAuth:
             return None
 
     def register_user(self, user_id: str, num_samples: int = 3) -> bool:
-        """Register user with multiple face samples"""
+        """Register user with multiple face samples and save to generated/ directory"""
         print(f"Starting registration for user: {user_id}")
         print(f"Will capture {num_samples} samples")
 
         os.makedirs("captured_images", exist_ok=True)
+        os.makedirs("generated", exist_ok=True)
         face_encodings = []
 
         for i in range(num_samples):
@@ -176,11 +177,28 @@ class SimpleFaceAuth:
         }
 
         self.save_database()
+
+        # Save user's face encodings to generated/ directory
+        generated_file = f"generated/{user_id}.json"
+        user_data = {
+            "user_id": user_id,
+            "face_encodings": face_encodings,
+            "enrollment_date": datetime.now().isoformat(),
+            "sample_count": len(face_encodings)
+        }
+
+        try:
+            with open(generated_file, 'w') as f:
+                json.dump(user_data, f, indent=2)
+            print(f"✅ User data saved to: {generated_file}")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to save to generated/ directory: {e}")
+
         print(f"Registration complete! {len(face_encodings)} samples stored for {user_id}")
         return True
 
     def authenticate_user(self, tolerance: float = 0.6) -> bool:
-        """Authenticate user"""
+        """Authenticate user by matching against files in source/ directory"""
         print("Starting authentication...")
 
         # Capture authentication image
@@ -199,26 +217,62 @@ class SimpleFaceAuth:
             print("No face detected in authentication image")
             return False
 
-        # Compare against registered users
-        if not self.database.get("users"):
-            print("No users registered")
+        # Load face encodings from source/ directory
+        source_dir = "source"
+        if not os.path.exists(source_dir):
+            print(f"Error: '{source_dir}' directory does not exist")
+            print(f"Please create '{source_dir}' directory and add user face encoding files")
             return False
 
-        print(f"Comparing against {len(self.database['users'])} registered users...")
+        # Get all JSON files from source/ directory
+        json_files = [f for f in os.listdir(source_dir) if f.endswith('.json')]
+
+        if not json_files:
+            print(f"No user files found in '{source_dir}' directory")
+            print(f"Please add user face encoding JSON files to '{source_dir}' directory")
+            return False
+
+        print(f"Found {len(json_files)} user file(s) in '{source_dir}' directory")
+        print(f"Comparing against users from source/ directory...")
 
         best_match = None
         best_distance = float('inf')
+        users_loaded = 0
 
-        for user_id, user_data in self.database["users"].items():
-            user_encodings = [np.array(sample["encoding"]) for sample in user_data["face_encodings"]]
-            distances = face_recognition.face_distance(user_encodings, auth_encoding)
-            min_distance = np.min(distances)
+        for json_file in json_files:
+            file_path = os.path.join(source_dir, json_file)
+            try:
+                with open(file_path, 'r') as f:
+                    user_data = json.load(f)
 
-            print(f"User {user_id}: distance = {min_distance:.3f}")
+                user_id = user_data.get("user_id")
+                if not user_id:
+                    print(f"Warning: No user_id in {json_file}, skipping")
+                    continue
 
-            if min_distance < best_distance:
-                best_distance = min_distance
-                best_match = user_id
+                face_encodings_data = user_data.get("face_encodings", [])
+                if not face_encodings_data:
+                    print(f"Warning: No face encodings in {json_file}, skipping")
+                    continue
+
+                users_loaded += 1
+                user_encodings = [np.array(sample["encoding"]) for sample in face_encodings_data]
+                distances = face_recognition.face_distance(user_encodings, auth_encoding)
+                min_distance = np.min(distances)
+
+                print(f"User {user_id}: distance = {min_distance:.3f}")
+
+                if min_distance < best_distance:
+                    best_distance = min_distance
+                    best_match = user_id
+
+            except Exception as e:
+                print(f"Error loading {json_file}: {e}")
+                continue
+
+        if users_loaded == 0:
+            print("No valid user files could be loaded from source/ directory")
+            return False
 
         # Check if match is within tolerance
         if best_match and best_distance <= tolerance:
@@ -235,12 +289,83 @@ class SimpleFaceAuth:
                 print(f"Threshold: {tolerance:.3f}")
             return False
 
+    def export_user(self, user_id: str, export_path: str = None) -> bool:
+        """Export a user's face data to a file"""
+        if user_id not in self.database["users"]:
+            print(f"User '{user_id}' not found in database")
+            return False
+
+        # Auto-generate filename if not provided
+        if export_path is None:
+            # Create exports directory if it doesn't exist
+            export_dir = "exported_credentials"
+            os.makedirs(export_dir, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_path = f"{export_dir}/{user_id}_credentials_{timestamp}.json"
+
+        user_data = {
+            "user_id": user_id,
+            "user_data": self.database["users"][user_id],
+            "exported_at": datetime.now().isoformat(),
+            "version": self.database.get("version", "1.0")
+        }
+
+        try:
+            with open(export_path, 'w') as f:
+                json.dump(user_data, f, indent=2)
+            print(f"User '{user_id}' exported successfully to {export_path}")
+            return True
+        except Exception as e:
+            print(f"Error exporting user: {e}")
+            return False
+
+    def import_user(self, import_path: str) -> bool:
+        """Import a user's face data from a file"""
+        try:
+            with open(import_path, 'r') as f:
+                user_data = json.load(f)
+
+            user_id = user_data["user_id"]
+
+            # Check if user already exists
+            if user_id in self.database["users"]:
+                response = input(f"User '{user_id}' already exists. Overwrite? (y/N): ")
+                if response.lower() != 'y':
+                    print("Import cancelled")
+                    return False
+
+            # Import the user data
+            self.database["users"][user_id] = user_data["user_data"]
+            self.save_database()
+
+            print(f"User '{user_id}' imported successfully from {import_path}")
+            print(f"Original export date: {user_data.get('exported_at', 'Unknown')}")
+            return True
+
+        except Exception as e:
+            print(f"Error importing user: {e}")
+            return False
+
+    def list_users(self) -> None:
+        """List all users in the database"""
+        if not self.database["users"]:
+            print("No users found in database")
+            return
+
+        print(f"Users in database ({len(self.database['users'])} total):")
+        for user_id, user_data in self.database["users"].items():
+            num_encodings = len(user_data.get("face_encodings", []))
+            created = user_data.get("created_at", "Unknown")
+            print(f"  - {user_id}: {num_encodings} face samples (created: {created})")
+
 def main():
     parser = argparse.ArgumentParser(description="Simple Face Authentication")
-    parser.add_argument("--mode", choices=["register", "auth"], required=True)
+    parser.add_argument("--mode", choices=["register", "auth", "export", "import", "list"], required=True)
     parser.add_argument("--user", type=str, default="user")
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--tolerance", type=float, default=0.6)
+    parser.add_argument("--file", type=str, help="File path for export/import operations")
 
     args = parser.parse_args()
 
@@ -252,6 +377,18 @@ def main():
     elif args.mode == "auth":
         success = face_auth.authenticate_user(args.tolerance)
         sys.exit(0 if success else 1)
+    elif args.mode == "export":
+        success = face_auth.export_user(args.user, args.file)
+        sys.exit(0 if success else 1)
+    elif args.mode == "import":
+        if not args.file:
+            print("Error: --file required for import mode")
+            sys.exit(1)
+        success = face_auth.import_user(args.file)
+        sys.exit(0 if success else 1)
+    elif args.mode == "list":
+        face_auth.list_users()
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
