@@ -3,6 +3,10 @@ name = "face_auth"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "face_auth"
+path = "src/lib.rs"
+
 [[bin]]
 name = "face_auth"
 path = "src/main.rs"

@@ -1,9 +1,6 @@
 use anyhow::Result;
 use std::io::{self, Write};
-
-mod standalone_python;
-
-use standalone_python::StandalonePythonFaceAuth;
+use face_auth::StandalonePythonFaceAuth;
 
 #[tokio::main]
 async fn main() -> Result<()> {
