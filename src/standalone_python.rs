@@ -4,34 +4,76 @@ use std::path::Path;
 
 pub struct StandalonePythonFaceAuth {
     executable_path: String,
+    script_path: String,
 }
 
 impl StandalonePythonFaceAuth {
     pub fn new() -> Result<Self> {
-        // Use the Python script directly with virtual environment instead of broken PyInstaller
-        let executable_path = "./face_auth_env/bin/python";
+        // Try to find Python virtual environment
+        // First try current directory, then parent directory
+        let possible_paths = vec![
+            "./face_auth_env/bin/python",
+            "../face_auth_env/bin/python",
+            "../../face_auth_env/bin/python",
+        ];
 
-        if !Path::new(executable_path).exists() {
-            return Err(anyhow!("Python virtual environment not found at: {}\nPlease run: ./setup_python_env.sh", executable_path));
+        let mut executable_path = None;
+        for path in &possible_paths {
+            if Path::new(path).exists() {
+                executable_path = Some(path.to_string());
+                break;
+            }
         }
 
+        let executable_path = executable_path.ok_or_else(|| {
+            anyhow!(
+                "Python virtual environment not found. Tried:\n{}\nPlease run: ./setup_python_env.sh",
+                possible_paths.join("\n")
+            )
+        })?;
+
+        // Find Python script
+        let script_paths = vec![
+            "python_face_auth_simple.py",
+            "../python_face_auth_simple.py",
+            "../../python_face_auth_simple.py",
+        ];
+
+        let mut script_path = None;
+        for path in &script_paths {
+            if Path::new(path).exists() {
+                script_path = Some(path.to_string());
+                break;
+            }
+        }
+
+        let script_path = script_path.ok_or_else(|| {
+            anyhow!(
+                "Python script not found. Tried:\n{}",
+                script_paths.join("\n")
+            )
+        })?;
+
         Ok(Self {
-            executable_path: executable_path.to_string(),
+            executable_path,
+            script_path,
         })
     }
 
-    pub fn register_user(&self, username: &str, samples: u32) -> Result<bool> {
+    pub fn register_user(&self, username: &str, samples: u32, generated_dir: &str) -> Result<bool> {
         println!("🦀 Using standalone Python executable (NO Python install required)");
         println!("📦 Executable: {}", self.executable_path);
 
         let output = Command::new(&self.executable_path)
-            .arg("python_face_auth_simple.py")
+            .arg(&self.script_path)
             .arg("--mode")
             .arg("register")
             .arg("--user")
             .arg(username)
             .arg("--samples")
             .arg(&samples.to_string())
+            .arg("--generated-dir")
+            .arg(generated_dir)
             .output()?;
 
         if output.status.success() {
@@ -50,16 +92,18 @@ impl StandalonePythonFaceAuth {
         }
     }
 
-    pub fn authenticate_user(&self, tolerance: f64) -> Result<StandaloneAuthResult> {
+    pub fn authenticate_user(&self, tolerance: f64, source_dir: &str) -> Result<StandaloneAuthResult> {
         println!("🦀 Using standalone Python executable (NO Python install required)");
         println!("📦 Executable: {}", self.executable_path);
 
         let output = Command::new(&self.executable_path)
-            .arg("python_face_auth_simple.py")
+            .arg(&self.script_path)
             .arg("--mode")
             .arg("auth")
             .arg("--tolerance")
             .arg(&tolerance.to_string())
+            .arg("--source-dir")
+            .arg(source_dir)
             .output()?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -93,7 +137,7 @@ impl StandalonePythonFaceAuth {
 
     pub fn export_user(&self, username: &str, filename: &str) -> Result<bool> {
         let mut cmd = Command::new(&self.executable_path);
-        cmd.arg("python_face_auth_simple.py")
+        cmd.arg(&self.script_path)
             .arg("--mode")
             .arg("export")
             .arg("--user")
@@ -119,7 +163,7 @@ impl StandalonePythonFaceAuth {
 
     pub fn import_user(&self, filename: &str) -> Result<bool> {
         let output = Command::new(&self.executable_path)
-            .arg("python_face_auth_simple.py")
+            .arg(&self.script_path)
             .arg("--mode")
             .arg("import")
             .arg("--file")
@@ -139,7 +183,7 @@ impl StandalonePythonFaceAuth {
 
     pub fn list_users(&self) -> Result<()> {
         let output = Command::new(&self.executable_path)
-            .arg("python_face_auth_simple.py")
+            .arg(&self.script_path)
             .arg("--mode")
             .arg("list")
             .output()?;
@@ -164,7 +208,7 @@ impl StandalonePythonFaceAuth {
 
         // Test the executable
         let output = Command::new(&self.executable_path)
-            .arg("python_face_auth_simple.py")
+            .arg(&self.script_path)
             .arg("--help")
             .output()?;
 

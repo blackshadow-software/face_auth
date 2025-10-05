@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
                                 if io::stdin().read_line(&mut username).is_ok() {
                                     let username = username.trim();
 
-                                    match standalone_auth.register_user(username, 3) {
+                                    match standalone_auth.register_user(username, 3, "generated") {
                                         Ok(true) => {
                                             println!("\n🎉 Standalone Python registration successful!");
                                             println!("✅ High-accuracy face model trained with standalone executable!");
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
                     Ok(standalone_auth) => {
                         match standalone_auth.check_executable() {
                             Ok(_) => {
-                                match standalone_auth.authenticate_user(0.4) {
+                                match standalone_auth.authenticate_user(0.4, "source") {
                                     Ok(result) => {
                                         if result.is_match.unwrap_or(false) {
                                             println!("\n✅ Standalone Python Authentication Successful!");

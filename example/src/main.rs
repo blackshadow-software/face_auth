@@ -9,6 +9,14 @@ async fn main() -> Result<()> {
     println!("  Face Auth Library - Example Application");
     println!("===========================================\n");
 
+    // Get custom paths from environment variables or use defaults
+    let generated_dir = &"generated";
+    let source_dir = &"source";
+    println!("📁 Configuration:");
+    println!("   Generated directory: {}", generated_dir);
+    println!("   Source directory: {}", source_dir);
+    println!();
+
     // Initialize the face authentication system
     let face_auth = FaceAuth::new()?;
 
@@ -41,12 +49,12 @@ async fn main() -> Result<()> {
                 let username = username.trim();
 
                 println!("\nRegistering user '{}'...", username);
-                match face_auth.register_user(username, 3).await {
+                match face_auth.register_user(username, 3, &generated_dir).await {
                     Ok(true) => {
                         println!("✓ Registration successful!");
-                        println!("File saved to: generated/{}.json", username);
+                        println!("File saved to: {}/{}.json", generated_dir, username);
                         println!("\nTo enable authentication, run:");
-                        println!("  cp generated/{}.json source/", username);
+                        println!("  cp {}/{}.json {}/", generated_dir, username, source_dir);
                     }
                     Ok(false) => println!("✗ Registration failed"),
                     Err(e) => println!("✗ Error: {}", e),
@@ -54,7 +62,7 @@ async fn main() -> Result<()> {
             }
             "2" => {
                 println!("\nAuthenticating...");
-                match face_auth.authenticate_user(0.6).await {
+                match face_auth.authenticate_user(0.6, &source_dir).await {
                     Ok(result) => {
                         if result.is_authenticated {
                             println!("\n✓ Authentication successful!");

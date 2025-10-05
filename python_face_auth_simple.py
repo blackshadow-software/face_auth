@@ -128,13 +128,14 @@ class SimpleFaceAuth:
             print(f"Error processing image: {e}")
             return None
 
-    def register_user(self, user_id: str, num_samples: int = 3) -> bool:
-        """Register user with multiple face samples and save to generated/ directory"""
+    def register_user(self, user_id: str, num_samples: int = 3, generated_dir: str = "generated") -> bool:
+        """Register user with multiple face samples and save to specified generated directory"""
         print(f"Starting registration for user: {user_id}")
         print(f"Will capture {num_samples} samples")
+        print(f"Generated directory: {generated_dir}")
 
         os.makedirs("captured_images", exist_ok=True)
-        os.makedirs("generated", exist_ok=True)
+        os.makedirs(generated_dir, exist_ok=True)
         face_encodings = []
 
         for i in range(num_samples):
@@ -178,8 +179,8 @@ class SimpleFaceAuth:
 
         self.save_database()
 
-        # Save user's face encodings to generated/ directory
-        generated_file = f"generated/{user_id}.json"
+        # Save user's face encodings to specified generated directory
+        generated_file = os.path.join(generated_dir, f"{user_id}.json")
         user_data = {
             "user_id": user_id,
             "face_encodings": face_encodings,
@@ -192,14 +193,15 @@ class SimpleFaceAuth:
                 json.dump(user_data, f, indent=2)
             print(f"✅ User data saved to: {generated_file}")
         except Exception as e:
-            print(f"⚠️ Warning: Failed to save to generated/ directory: {e}")
+            print(f"⚠️ Warning: Failed to save to {generated_dir}/ directory: {e}")
 
         print(f"Registration complete! {len(face_encodings)} samples stored for {user_id}")
         return True
 
-    def authenticate_user(self, tolerance: float = 0.6) -> bool:
-        """Authenticate user by matching against files in source/ directory"""
+    def authenticate_user(self, tolerance: float = 0.6, source_dir: str = "source") -> bool:
+        """Authenticate user by matching against files in specified source directory"""
         print("Starting authentication...")
+        print(f"Source directory: {source_dir}")
 
         # Capture authentication image
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -217,8 +219,7 @@ class SimpleFaceAuth:
             print("No face detected in authentication image")
             return False
 
-        # Load face encodings from source/ directory
-        source_dir = "source"
+        # Load face encodings from specified source directory
         if not os.path.exists(source_dir):
             print(f"Error: '{source_dir}' directory does not exist")
             print(f"Please create '{source_dir}' directory and add user face encoding files")
@@ -366,16 +367,18 @@ def main():
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--tolerance", type=float, default=0.6)
     parser.add_argument("--file", type=str, help="File path for export/import operations")
+    parser.add_argument("--generated-dir", type=str, default="generated", help="Directory to save registered user files")
+    parser.add_argument("--source-dir", type=str, default="source", help="Directory to load user files for authentication")
 
     args = parser.parse_args()
 
     face_auth = SimpleFaceAuth()
 
     if args.mode == "register":
-        success = face_auth.register_user(args.user, args.samples)
+        success = face_auth.register_user(args.user, args.samples, args.generated_dir)
         sys.exit(0 if success else 1)
     elif args.mode == "auth":
-        success = face_auth.authenticate_user(args.tolerance)
+        success = face_auth.authenticate_user(args.tolerance, args.source_dir)
         sys.exit(0 if success else 1)
     elif args.mode == "export":
         success = face_auth.export_user(args.user, args.file)

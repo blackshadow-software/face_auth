@@ -80,12 +80,13 @@ impl FaceAuth {
     ///
     /// * `username` - The username to register
     /// * `samples` - Number of face samples to capture (default: 3)
+    /// * `generated_dir` - Directory path where user data will be saved
     ///
     /// # Returns
     ///
     /// Returns `Ok(true)` if registration was successful, `Ok(false)` if it failed
-    pub async fn register_user(&self, username: &str, samples: u32) -> Result<bool> {
-        self.python_auth.register_user(username, samples)
+    pub async fn register_user(&self, username: &str, samples: u32, generated_dir: &str) -> Result<bool> {
+        self.python_auth.register_user(username, samples, generated_dir)
     }
 
     /// Authenticate a user by capturing their face
@@ -93,12 +94,13 @@ impl FaceAuth {
     /// # Arguments
     ///
     /// * `tolerance` - Face matching tolerance (0.0-1.0, lower = stricter)
+    /// * `source_dir` - Directory path where user data is loaded from
     ///
     /// # Returns
     ///
     /// Returns authentication result with user information
-    pub async fn authenticate_user(&self, tolerance: f64) -> Result<FaceAuthResult> {
-        let result = self.python_auth.authenticate_user(tolerance)?;
+    pub async fn authenticate_user(&self, tolerance: f64, source_dir: &str) -> Result<FaceAuthResult> {
+        let result = self.python_auth.authenticate_user(tolerance, source_dir)?;
         Ok(result.into())
     }
 
