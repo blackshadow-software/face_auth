@@ -168,6 +168,7 @@ impl StandalonePythonFaceAuth {
             "dlib>=19.24.0",
             "opencv-python>=4.8.0",
             "face_recognition>=1.3.0",
+            "git+https://github.com/ageitgey/face_recognition_models",
         ];
 
         for (i, package) in packages.iter().enumerate() {
