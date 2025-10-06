@@ -135,9 +135,9 @@ impl StandalonePythonFaceAuth {
     fn ensure_dependencies(python_path: &str) -> Result<()> {
         println!("🔍 Checking Python dependencies...");
 
-        // Check if face_recognition is installed
+        // Check if all required packages are installed
         let check = Command::new(python_path)
-            .args(&["-c", "import face_recognition; import cv2; print('OK')"])
+            .args(&["-c", "import face_recognition; import cv2; import face_recognition_models; print('OK')"])
             .output();
 
         if let Ok(output) = check {
