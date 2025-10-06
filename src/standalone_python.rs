@@ -9,55 +9,193 @@ pub struct StandalonePythonFaceAuth {
 
 impl StandalonePythonFaceAuth {
     pub fn new() -> Result<Self> {
-        // Try to find Python virtual environment
-        // First try current directory, then parent directory
-        let possible_paths = vec![
-            "./face_auth_env/bin/python",
-            "../face_auth_env/bin/python",
-            "../../face_auth_env/bin/python",
-        ];
+        // Find Python script first
+        let script_path = Self::find_script_path()?;
 
-        let mut executable_path = None;
-        for path in &possible_paths {
-            if Path::new(path).exists() {
-                executable_path = Some(path.to_string());
-                break;
-            }
-        }
+        // Try to find or setup Python environment
+        let executable_path = Self::find_or_setup_python()?;
 
-        let executable_path = executable_path.ok_or_else(|| {
-            anyhow!(
-                "Python virtual environment not found. Tried:\n{}\nPlease run: ./setup_python_env.sh",
-                possible_paths.join("\n")
-            )
-        })?;
+        // Verify dependencies are installed
+        Self::ensure_dependencies(&executable_path)?;
 
-        // Find Python script
+        Ok(Self {
+            executable_path,
+            script_path,
+        })
+    }
+
+    fn find_script_path() -> Result<String> {
         let script_paths = vec![
             "python_face_auth_simple.py",
             "../python_face_auth_simple.py",
             "../../python_face_auth_simple.py",
         ];
 
-        let mut script_path = None;
         for path in &script_paths {
             if Path::new(path).exists() {
-                script_path = Some(path.to_string());
-                break;
+                return Ok(path.to_string());
             }
         }
 
-        let script_path = script_path.ok_or_else(|| {
-            anyhow!(
-                "Python script not found. Tried:\n{}",
-                script_paths.join("\n")
-            )
-        })?;
+        Err(anyhow!(
+            "Python script not found. Tried:\n{}",
+            script_paths.join("\n")
+        ))
+    }
 
-        Ok(Self {
-            executable_path,
-            script_path,
-        })
+    fn find_or_setup_python() -> Result<String> {
+        println!("🔍 Searching for Python environment...");
+
+        // First, try to find existing virtual environment
+        let venv_paths = vec![
+            "./face_auth_env/bin/python",
+            "../face_auth_env/bin/python",
+            "../../face_auth_env/bin/python",
+        ];
+
+        for path in &venv_paths {
+            if Path::new(path).exists() {
+                println!("✅ Found virtual environment at: {}", path);
+                return Ok(path.to_string());
+            }
+        }
+
+        println!("⚠️  Virtual environment not found");
+        println!("🔧 Attempting to create virtual environment automatically...");
+
+        // Try to create virtual environment
+        if let Ok(python_path) = Self::create_virtual_environment() {
+            return Ok(python_path);
+        }
+
+        println!("⚠️  Could not create virtual environment");
+        println!("🔍 Falling back to system Python...");
+
+        // Fallback to system Python
+        Self::find_system_python()
+    }
+
+    fn create_virtual_environment() -> Result<String> {
+        // Check if python3 is available
+        let python_check = Command::new("python3")
+            .arg("--version")
+            .output();
+
+        if python_check.is_err() {
+            return Err(anyhow!("python3 not found in system"));
+        }
+
+        println!("📦 Creating virtual environment at ./face_auth_env...");
+
+        // Create virtual environment
+        let output = Command::new("python3")
+            .args(&["-m", "venv", "face_auth_env"])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Failed to create venv: {}", stderr));
+        }
+
+        let venv_python = "./face_auth_env/bin/python";
+        if Path::new(venv_python).exists() {
+            println!("✅ Virtual environment created successfully");
+            Ok(venv_python.to_string())
+        } else {
+            Err(anyhow!("Virtual environment created but python not found"))
+        }
+    }
+
+    fn find_system_python() -> Result<String> {
+        // Try different Python commands
+        let python_commands = vec!["python3", "python"];
+
+        for cmd in python_commands {
+            let check = Command::new(cmd)
+                .arg("--version")
+                .output();
+
+            if let Ok(output) = check {
+                if output.status.success() {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    println!("✅ Found system Python: {} ({})", cmd, version.trim());
+                    return Ok(cmd.to_string());
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "No Python installation found. Please install Python 3.8+ from:\n\
+             - macOS: brew install python3\n\
+             - Linux: sudo apt install python3 python3-pip\n\
+             - Windows: https://www.python.org/downloads/"
+        ))
+    }
+
+    fn ensure_dependencies(python_path: &str) -> Result<()> {
+        println!("🔍 Checking Python dependencies...");
+
+        // Check if face_recognition is installed
+        let check = Command::new(python_path)
+            .args(&["-c", "import face_recognition; import cv2; print('OK')"])
+            .output();
+
+        if let Ok(output) = check {
+            if output.status.success() && String::from_utf8_lossy(&output.stdout).contains("OK") {
+                println!("✅ All dependencies are installed");
+                return Ok(());
+            }
+        }
+
+        println!("⚠️  Required dependencies not found");
+        println!("📦 Installing dependencies automatically...");
+
+        Self::install_dependencies(python_path)
+    }
+
+    fn install_dependencies(python_path: &str) -> Result<()> {
+        // First ensure pip is up to date
+        println!("📦 Upgrading pip...");
+        let _ = Command::new(python_path)
+            .args(&["-m", "pip", "install", "--upgrade", "pip"])
+            .output();
+
+        // Install each required package
+        let packages = vec![
+            "numpy>=1.21.0",
+            "Pillow>=9.0.0",
+            "cmake>=3.18.0",
+            "dlib>=19.24.0",
+            "opencv-python>=4.8.0",
+            "face_recognition>=1.3.0",
+        ];
+
+        for (i, package) in packages.iter().enumerate() {
+            println!("📦 Installing {}/{}: {}", i + 1, packages.len(), package);
+
+            let output = Command::new(python_path)
+                .args(&["-m", "pip", "install", package])
+                .output()?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("⚠️  Warning: Failed to install {}: {}", package, stderr);
+
+                // For critical packages, fail
+                if package.contains("face_recognition") {
+                    return Err(anyhow!(
+                        "Failed to install face_recognition. This is required.\n\
+                         On macOS, you may need to install: brew install cmake\n\
+                         Error: {}", stderr
+                    ));
+                }
+            } else {
+                println!("✅ Installed {}", package);
+            }
+        }
+
+        println!("✅ All dependencies installed successfully!");
+        Ok(())
     }
 
     pub fn register_user(&self, username: &str, samples: u32, generated_dir: &str) -> Result<bool> {
